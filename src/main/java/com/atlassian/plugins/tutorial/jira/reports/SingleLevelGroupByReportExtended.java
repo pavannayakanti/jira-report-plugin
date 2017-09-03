@@ -1,7 +1,6 @@
 package com.atlassian.plugins.tutorial.jira.reports;
 
 import com.atlassian.core.util.map.EasyMap;
-import com.atlassian.crowd.embedded.api.User;
 import com.atlassian.jira.bc.JiraServiceContext;
 import com.atlassian.jira.bc.JiraServiceContextImpl;
 import com.atlassian.jira.bc.filter.SearchRequestService;
@@ -9,6 +8,7 @@ import com.atlassian.jira.bc.issue.search.SearchService;
 import com.atlassian.jira.exception.PermissionException;
 import com.atlassian.jira.issue.CustomFieldManager;
 import com.atlassian.jira.issue.IssueFactory;
+import com.atlassian.jira.issue.fields.FieldManager;
 import com.atlassian.jira.issue.index.IssueIndexManager;
 import com.atlassian.jira.issue.search.ReaderCache;
 import com.atlassian.jira.issue.search.SearchException;
@@ -19,11 +19,12 @@ import com.atlassian.jira.issue.statistics.StatisticsMapper;
 import com.atlassian.jira.issue.statistics.StatsGroup;
 import com.atlassian.jira.issue.statistics.util.OneDimensionalDocIssueHitCollector;
 import com.atlassian.jira.plugin.report.impl.AbstractReport;
+import com.atlassian.jira.project.ProjectManager;
 import com.atlassian.jira.security.JiraAuthenticationContext;
+import com.atlassian.jira.user.ApplicationUser;
 import com.atlassian.jira.util.SimpleErrorCollection;
 import com.atlassian.jira.web.FieldVisibilityManager;
 import com.atlassian.jira.web.action.ProjectActionSupport;
-import com.atlassian.jira.web.bean.FieldVisibilityBean;
 import com.atlassian.jira.web.bean.PagerFilter;
 import com.atlassian.jira.web.util.OutlookDateManager;
 import com.atlassian.util.profiling.UtilTimerStack;
@@ -31,6 +32,7 @@ import com.opensymphony.util.TextUtils;
 import org.apache.commons.lang.StringUtils;
 import org.apache.log4j.Logger;
 import org.apache.lucene.search.Collector;
+
 import java.util.Map;
 
 public class SingleLevelGroupByReportExtended extends AbstractReport
@@ -46,13 +48,15 @@ public class SingleLevelGroupByReportExtended extends AbstractReport
     private final SearchService searchService;
     private final FieldVisibilityManager fieldVisibilityManager;
     private final ReaderCache readerCache;
+    private final FieldManager fieldManager;
+    private final ProjectManager projectManager;
     private final OutlookDateManager outlookDateManager;
 
     public SingleLevelGroupByReportExtended(final SearchProvider searchProvider, final JiraAuthenticationContext authenticationContext,
                                             final SearchRequestService searchRequestService, final IssueFactory issueFactory,
                                             final CustomFieldManager customFieldManager, final IssueIndexManager issueIndexManager,
                                             final SearchService searchService, final FieldVisibilityManager fieldVisibilityManager,
-                                            final ReaderCache readerCache, final OutlookDateManager outlookDateManager )
+                                            final ReaderCache readerCache, FieldManager fieldManager, ProjectManager projectManager, final OutlookDateManager outlookDateManager)
     {
         this.searchProvider = searchProvider;
         this.authenticationContext = authenticationContext;
@@ -63,10 +67,12 @@ public class SingleLevelGroupByReportExtended extends AbstractReport
         this.searchService = searchService;
         this.fieldVisibilityManager = fieldVisibilityManager;
         this.readerCache = readerCache;
+        this.fieldManager = fieldManager;
+        this.projectManager = projectManager;
         this.outlookDateManager =  outlookDateManager;
     }
 
-    public StatsGroup getOptions(SearchRequest sr, User user, StatisticsMapper mapper) throws PermissionException
+    public StatsGroup getOptions(SearchRequest sr, ApplicationUser user, StatisticsMapper mapper) throws PermissionException
     {
 
         try
@@ -80,7 +86,7 @@ public class SingleLevelGroupByReportExtended extends AbstractReport
         }
     }
 
-    public StatsGroup searchMapIssueKeys(SearchRequest request, User searcher, StatisticsMapper mapper)
+    public StatsGroup searchMapIssueKeys(SearchRequest request, ApplicationUser searcher, StatisticsMapper mapper)
             throws SearchException
     {
         try
@@ -89,7 +95,7 @@ public class SingleLevelGroupByReportExtended extends AbstractReport
             StatsGroup statsGroup = new StatsGroup(mapper);
             Collector hitCollector = new OneDimensionalDocIssueHitCollector(mapper.getDocumentConstant(), statsGroup,
                     issueIndexManager.getIssueSearcher().getIndexReader(), issueFactory,
-                    fieldVisibilityManager, readerCache);
+                    fieldVisibilityManager, readerCache, fieldManager, projectManager);
             searchProvider.searchAndSort((request != null) ? request.getQuery() : null, searcher, hitCollector, PagerFilter.getUnlimitedFilter());
             return statsGroup;
         }
@@ -125,7 +131,6 @@ public class SingleLevelGroupByReportExtended extends AbstractReport
                     "searchRequest", request,
                     "mapperType", mapperName,
                     "customFieldManager", customFieldManager,
-                    "fieldVisibility", new FieldVisibilityBean(),
                     "searchService", searchService,
                     "portlet", this);
             startingParams.put("outlookDate", 

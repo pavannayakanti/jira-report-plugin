@@ -1,24 +1,19 @@
 package com.atlassian.plugins.tutorial.jira.reports;
 
-import com.atlassian.jira.plugin.report.impl.AbstractReport;
-import com.atlassian.jira.web.action.ProjectActionSupport;
-
-
 import com.atlassian.core.util.DateUtils;
 import com.atlassian.jira.issue.search.SearchException;
 import com.atlassian.jira.issue.search.SearchProvider;
 import com.atlassian.jira.jql.builder.JqlQueryBuilder;
+import com.atlassian.jira.plugin.report.impl.AbstractReport;
 import com.atlassian.jira.project.ProjectManager;
+import com.atlassian.jira.user.ApplicationUser;
 import com.atlassian.jira.util.I18nHelper;
 import com.atlassian.jira.util.ParameterUtils;
+import com.atlassian.jira.web.action.ProjectActionSupport;
 import com.atlassian.jira.web.bean.I18nBean;
-
 import com.atlassian.jira.web.util.OutlookDate;
 import com.atlassian.jira.web.util.OutlookDateManager;
 import com.atlassian.query.Query;
-
-import com.atlassian.crowd.embedded.api.User;
-
 import org.apache.log4j.Logger;
 
 import java.util.ArrayList;
@@ -62,7 +57,7 @@ public class CreationReport extends AbstractReport
     // Generate the report
     public String generateReportHtml(ProjectActionSupport action, Map params) throws Exception
     {
-        User remoteUser = action.getRemoteUser();
+        ApplicationUser remoteUser = action.getLoggedInUser();
         I18nHelper i18nBean = new I18nBean(remoteUser);
 
         // Retrieve the project parameter
@@ -115,7 +110,7 @@ public class CreationReport extends AbstractReport
     }
 
     // Retrieve the issues opened during the time period specified.
-    private long getOpenIssueCount(User remoteUser, Date startDate, Date endDate, Long projectId) throws SearchException
+    private long getOpenIssueCount(ApplicationUser remoteUser, Date startDate, Date endDate, Long projectId) throws SearchException
     {
         JqlQueryBuilder queryBuilder = JqlQueryBuilder.newBuilder();
         Query query = queryBuilder.where().createdBetween(startDate, endDate).and().project(projectId).buildQuery();
@@ -123,7 +118,7 @@ public class CreationReport extends AbstractReport
         return searchProvider.searchCount(query, remoteUser);
     }
 
-    private void getIssueCount(Date startDate, Date endDate, Long interval, User remoteUser, Long projectId) throws SearchException
+    private void getIssueCount(Date startDate, Date endDate, Long interval, ApplicationUser remoteUser, Long projectId) throws SearchException
     {
         // Calculate the interval value in milliseconds
         long intervalValue = interval.longValue() * DateUtils.DAY_MILLIS;
@@ -157,7 +152,7 @@ public class CreationReport extends AbstractReport
     // Validate the parameters set by the user.
     public void validate(ProjectActionSupport action, Map params)
     {
-        User remoteUser = action.getRemoteUser();
+        ApplicationUser remoteUser = action.getLoggedInUser();
         I18nHelper i18nBean = new I18nBean(remoteUser);
 
         Date startDate = ParameterUtils.getDateParam(params, "startDate", i18nBean.getLocale());
