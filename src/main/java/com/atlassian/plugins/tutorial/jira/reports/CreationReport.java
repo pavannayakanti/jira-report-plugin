@@ -1,18 +1,19 @@
 package com.atlassian.plugins.tutorial.jira.reports;
 
 import com.atlassian.core.util.DateUtils;
+import com.atlassian.jira.datetime.DateTimeFormatter;
+import com.atlassian.jira.datetime.DateTimeFormatterFactory;
+import com.atlassian.jira.datetime.DateTimeStyle;
 import com.atlassian.jira.issue.search.SearchException;
 import com.atlassian.jira.issue.search.SearchProvider;
 import com.atlassian.jira.jql.builder.JqlQueryBuilder;
 import com.atlassian.jira.plugin.report.impl.AbstractReport;
 import com.atlassian.jira.project.ProjectManager;
 import com.atlassian.jira.user.ApplicationUser;
-import com.atlassian.jira.util.I18nHelper;
 import com.atlassian.jira.util.ParameterUtils;
 import com.atlassian.jira.web.action.ProjectActionSupport;
-import com.atlassian.jira.web.bean.I18nBean;
-import com.atlassian.jira.web.util.OutlookDate;
-import com.atlassian.jira.web.util.OutlookDateManager;
+import com.atlassian.plugin.spring.scanner.annotation.component.Scanned;
+import com.atlassian.plugin.spring.scanner.annotation.imports.JiraImport;
 import com.atlassian.query.Query;
 import org.apache.log4j.Logger;
 
@@ -23,161 +24,105 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
-/**
- * Generate a histogram displaying number of issues opened in a specified period.
- * The time period is divided by the specifed value for the histogram display.
- */
-public class CreationReport extends AbstractReport
-{
+@Scanned
+public class CreationReport extends AbstractReport {
     private static final Logger log = Logger.getLogger(CreationReport.class);
-
-    // The max height for each bar in the histogram
-    private static final int MAX_HEIGHT = 200;
-    // Default interval value
-    private Long DEFAULT_INTERVAL = new Long(7);
-
-    // The highest issue count encountered in a search
+    private static final int MAX_HEIGHT = 360;
     private long maxCount = 0;
-    // A collection of issue open counts
-    private Collection<Long> openIssueCounts = new ArrayList<Long>();
-    // A collection of interval start dates - correlating with the openIssueCount collection.
-    private Collection<Date> dates = new ArrayList<Date>();
-
+    private Collection<Long> openIssuesCounts = new ArrayList<>();
+    private Collection<String> formattedDates = new ArrayList<>();
+    @JiraImport
     private final SearchProvider searchProvider;
-    private final OutlookDateManager outlookDateManager;
+    @JiraImport
     private final ProjectManager projectManager;
+    private final DateTimeFormatter formatter;
 
-    public CreationReport(SearchProvider searchProvider, OutlookDateManager outlookDateManager, ProjectManager projectManager)
-    {
+    private Date startDate;
+    private Date endDate;
+    private Long interval;
+    private Long projectId;
+
+    public CreationReport(SearchProvider searchProvider, ProjectManager projectManager,
+                          @JiraImport DateTimeFormatterFactory dateTimeFormatterFactory) {
         this.searchProvider = searchProvider;
-        this.outlookDateManager = outlookDateManager;
         this.projectManager = projectManager;
+        this.formatter = dateTimeFormatterFactory.formatter().withStyle(DateTimeStyle.DATE).forLoggedInUser();
     }
 
-    // Generate the report
-    public String generateReportHtml(ProjectActionSupport action, Map params) throws Exception
-    {
-        ApplicationUser remoteUser = action.getLoggedInUser();
-        I18nHelper i18nBean = new I18nBean(remoteUser);
 
-        // Retrieve the project parameter
-        Long projectId = ParameterUtils.getLongParam(params, "selectedProjectId");
-        // Retrieve the start and end dates and the time interval specified by the user
-        Date startDate = ParameterUtils.getDateParam(params, "startDate", i18nBean.getLocale());
-        Date endDate = ParameterUtils.getDateParam(params, "endDate", i18nBean.getLocale());
-        Long interval = ParameterUtils.getLongParam(params, "interval");
-
-        // Ensure that the interval is valid
-        if (interval == null || interval.longValue() <= 0)
-        {
-            interval = DEFAULT_INTERVAL;
-            log.error(action.getText("report.issuecreation.default.interval"));
+    public String generateReportHtml(ProjectActionSupport action, Map params) throws Exception {
+        //action.getLoggedInUser() since Jira 7.0.
+        //getLoggedInApplicationUser() since Jira 5.2
+        fillIssuesCounts(startDate, endDate, interval, action.getLoggedInUser(), projectId);
+        List<Number> issueBarHeights = new ArrayList<>();
+        if (maxCount > 0) {
+            openIssuesCounts.forEach(issueCount ->
+                    issueBarHeights.add((issueCount.floatValue() / maxCount) * MAX_HEIGHT)
+            );
         }
-
-        getIssueCount(startDate, endDate, interval, remoteUser, projectId);
-
-        List<Number> normalCount = new ArrayList<Number>();
-
-        // Normalise the counts for the max height
-        if (maxCount != MAX_HEIGHT && maxCount > 0)
-        {
-            for (Long asLong : openIssueCounts)
-            {
-                Float floatValue = new Float((asLong.floatValue() / maxCount) * MAX_HEIGHT);
-                // Round it back to an integer
-                Integer newValue = new Integer(floatValue.intValue());
-
-                normalCount.add(newValue);
-            }
-        }
-
-        if (maxCount < 0)
-            action.addErrorMessage(action.getText("report.issuecreation.error"));
-
-        // Pass the issues to the velocity template
-        Map<String, Object> velocityParams = new HashMap<String, Object>();
-        velocityParams.put("startDate", startDate);
-        velocityParams.put("endDate", endDate);
-        velocityParams.put("openCount", openIssueCounts);
-        velocityParams.put("normalisedCount", normalCount);
-        velocityParams.put("dates", dates);
-        velocityParams.put("maxHeight", new Integer(MAX_HEIGHT));
-        velocityParams.put("outlookDate", outlookDateManager.getOutlookDate(i18nBean.getLocale()));
+        Map<String, Object> velocityParams = new HashMap<>();
+        velocityParams.put("startDate", formatter.format(startDate));
+        velocityParams.put("endDate", formatter.format(endDate));
+        velocityParams.put("openCount", openIssuesCounts);
+        velocityParams.put("issueBarHeights", issueBarHeights);
+        velocityParams.put("dates", formattedDates);
+        velocityParams.put("maxHeight", MAX_HEIGHT);
         velocityParams.put("projectName", projectManager.getProjectObj(projectId).getName());
         velocityParams.put("interval", interval);
-
         return descriptor.getHtml("view", velocityParams);
     }
 
-    // Retrieve the issues opened during the time period specified.
-    private long getOpenIssueCount(ApplicationUser remoteUser, Date startDate, Date endDate, Long projectId) throws SearchException
-    {
+    private long getOpenIssueCount(ApplicationUser user, Date startDate, Date endDate, Long projectId) throws SearchException {
         JqlQueryBuilder queryBuilder = JqlQueryBuilder.newBuilder();
         Query query = queryBuilder.where().createdBetween(startDate, endDate).and().project(projectId).buildQuery();
-
-        return searchProvider.searchCount(query, remoteUser);
+        return searchProvider.searchCount(query, user);
     }
 
-    private void getIssueCount(Date startDate, Date endDate, Long interval, ApplicationUser remoteUser, Long projectId) throws SearchException
-    {
-        // Calculate the interval value in milliseconds
-        long intervalValue = interval.longValue() * DateUtils.DAY_MILLIS;
+    private void fillIssuesCounts(Date startDate, Date endDate, Long interval, ApplicationUser user, Long projectId) throws SearchException {
+        long intervalValue = interval * DateUtils.DAY_MILLIS;
         Date newStartDate;
-        long count = 0;
-
-        // Split the specified time period by the interval value
-        while (startDate.before(endDate))
-        {
-            newStartDate = new Date(startDate .getTime() + intervalValue);
-
-            // Retrieve the issues opened within the time interval
+        long count;
+        while (startDate.before(endDate)) {
+            newStartDate = new Date(startDate.getTime() + intervalValue);
             if (newStartDate.after(endDate))
-                count = getOpenIssueCount(remoteUser, startDate, endDate, projectId);
+                count = getOpenIssueCount(user, startDate, endDate, projectId);
             else
-                count = getOpenIssueCount(remoteUser, startDate, newStartDate, projectId);
-
-            // Store the highest count for normalisation of results
+                count = getOpenIssueCount(user, startDate, newStartDate, projectId);
             if (maxCount < count)
                 maxCount = count;
-
-            // Store the count and the start date for this period
-            openIssueCounts.add(new Long(count));
-            dates.add(startDate);
-
-            // Move start date to next period
+            openIssuesCounts.add(count);
+            formattedDates.add(formatter.format(startDate));
             startDate = newStartDate;
         }
     }
 
-    // Validate the parameters set by the user.
-    public void validate(ProjectActionSupport action, Map params)
-    {
-        ApplicationUser remoteUser = action.getLoggedInUser();
-        I18nHelper i18nBean = new I18nBean(remoteUser);
-
-        Date startDate = ParameterUtils.getDateParam(params, "startDate", i18nBean.getLocale());
-        Date endDate = ParameterUtils.getDateParam(params, "endDate", i18nBean.getLocale());
-        Long interval = ParameterUtils.getLongParam(params, "interval");
-        Long projectId = ParameterUtils.getLongParam(params, "selectedProjectId");
-
-        OutlookDate outlookDate = outlookDateManager.getOutlookDate(i18nBean.getLocale());
-
-        if (startDate == null || !outlookDate.isDatePickerDate(outlookDate.formatDMY(startDate)))
+    public void validate(ProjectActionSupport action, Map params) {
+        try {
+            startDate = formatter.parse(ParameterUtils.getStringParam(params, "startDate"));
+        } catch (IllegalArgumentException e) {
             action.addError("startDate", action.getText("report.issuecreation.startdate.required"));
-
-        if (endDate == null || !outlookDate.isDatePickerDate(outlookDate.formatDMY(endDate)))
+            log.error("Exception while parsing startDate");
+        }
+        try {
+            endDate = formatter.parse(ParameterUtils.getStringParam(params, "endDate"));
+        } catch (IllegalArgumentException e) {
             action.addError("endDate", action.getText("report.issuecreation.enddate.required"));
+            log.error("Exception while parsing endDate");
+        }
 
-        if (interval == null || interval.longValue() <= 0)
+        interval = ParameterUtils.getLongParam(params, "interval");
+        projectId = ParameterUtils.getLongParam(params, "selectedProjectId");
+        if (interval == null || interval <= 0) {
             action.addError("interval", action.getText("report.issuecreation.interval.invalid"));
-
-        if (projectId == null)
+            log.error("Invalid interval");
+        }
+        if (projectId == null || projectManager.getProjectObj(projectId) == null){
             action.addError("selectedProjectId", action.getText("report.issuecreation.projectid.invalid"));
-
-        // The end date must be after the start date
-        if (startDate != null && endDate != null && endDate.before(startDate))
-        {
+            log.error("Invalid projectId");
+        }
+        if (startDate != null && endDate != null && endDate.before(startDate)) {
             action.addError("endDate", action.getText("report.issuecreation.before.startdate"));
+            log.error("Invalid dates: start date should be before end date");
         }
     }
 }
